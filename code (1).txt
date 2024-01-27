@@ -1,0 +1,224 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.linalg import eigh_tridiagonal
+from numba import njit, float64
+
+
+# Physical parameters ==========
+
+
+h = 1.05457181765e-34            # Reduced Planck constant
+m = 9.1093837e-31                # Electron mass
+
+k = 8.9875517923e9               # Coulomb constant
+q = 1.60217663e-19               # Electron charge
+
+a = (h**2)/(k*m*(q**2))          # Bohr radius
+
+G = 6.6743e-11                   # Gravitational constant
+M = 1.67262192e-27               # Proton mass
+
+b = (m*M)/(m + M)                # Reduced mass
+
+
+# User inputs ==========
+
+
+print(80*'=')
+
+l = int(input('Energy level (1, 2 or 3): '))                     # Energy level
+f = int(input('Degree of self-interaction (0 or 1): '))          # Degree of self-interaction
+
+print(80*'=')
+
+
+# Numerical grid ==========
+
+
+if l == 1:
+    
+    N = 751                     # Number of grid points
+    L = 1.5e-9                  # Spatial extent
+    
+    if f == 0:
+        n = 10                  # Number of iterations
+        
+    if f == 1:
+        n = 50                  # Number of iterations
+    
+if l == 2:
+    
+    N = 1501                    # Number of grid points
+    L = 3e-9                    # Spatial extent
+    
+    if f == 0:
+        n = 10                  # Number of iterations
+        
+    if f == 1:
+        n = 100                 # Number of iterations
+    
+if l == 3:
+    
+    N = 3001                    # Number of grid points
+    L = 6e-9                    # Spatial extent
+    
+    if f == 0:
+        n = 10                  # Number of iterations
+        
+    if f == 1:
+        n = 200                 # Number of iterations
+
+r = np.linspace(0,L,N)          # Spatial discretization
+dr = r[1] - r[0]                # Space unit
+
+
+# Electron-proton potential ==========
+
+
+def V(r):
+    
+    N = len(r)
+    V = np.zeros(N)
+    
+    dr = r[1] - r[0]
+    
+    V[1:] = (- G*(m*M) - k*(q**2))/r[1:]
+    V[0] = (- G*(m*M) - k*(q**2))/(dr/2)
+    
+    return V
+
+
+# Self-interaction potential ==========
+
+
+@njit(float64[:](float64[:],float64[:]),nogil=True,fastmath=True)
+def W(phi,r):
+    
+    N = len(phi)
+    W = np.zeros(N)
+    W1 = np.zeros(N)
+    W2 = np.zeros(N)
+    
+    dr = r[1] - r[0]
+    
+    phi2 = phi**2
+    
+    for j in np.arange(1,N):
+        for i in np.arange(j):
+            W1[j] += phi2[i]*dr
+            
+        for i in np.arange(j,N):
+            W2[j] += phi2[i]*(1/r[i])*dr
+    
+    W[1:] = W1[1:]/r[1:] + W2[1:]
+    
+    for i in np.arange(1,N):
+        W[0] += phi2[i]*(1/r[i])*dr
+    
+    W = (- 4*np.pi*G*(m**2) + 4*np.pi*k*(q**2))*W
+    
+    return W
+
+
+# Spatial derivative ==========
+
+
+def second(A,dr):
+    
+    B = A.copy()
+    N = len(A)
+    
+    B[0] = (35*A[0] - 104*A[1] + 114*A[2] - 56*A[3] + 11*A[4])/(12*(dr**2))
+    B[1] = (11*A[0] - 20*A[1] + 6*A[2] + 4*A[3] - A[4])/(12*(dr**2))
+    
+    
+    B[N-1] = (11*A[N-5] - 56*A[N-4] + 114*A[N-3] - 104*A[N-2] + 35*A[N-1])/(12*(dr**2))
+    B[N-2] = (- A[N-5] + 4*A[N-4] + 6*A[N-3] - 20*A[N-2] + 11*A[N-1])/(12*(dr**2))
+    
+    for i in np.arange(2,N-2):
+        B[i] = (- A[i-2] + 16*A[i-1] - 30*A[i] + 16*A[i+1] - A[i+2])/(12*(dr**2))
+        
+    return B
+
+
+# Hydrogen atom fundamental state ==========
+
+
+psi0_1 = np.exp(- r/a)/np.sqrt(np.pi*(a**3))
+phi0_1 = r*psi0_1
+
+
+# Hydrogen atom first excited state ==========
+
+
+psi0_2 = (2 - r/a)*np.exp(- r/(2*a))/np.sqrt(32*np.pi*(a**3))
+phi0_2 = r*psi0_2
+
+
+# Hydrogen atom second excited state ==========
+
+
+psi0_3 = (27 - 18*r/a + 2*(r**2)/(a**2))*np.exp(- r/(3*a))/np.sqrt(19683*np.pi*(a**3))
+phi0_3 = r*psi0_3
+
+
+# Iterative procedure ==========
+
+
+print(80*'=')
+
+V = V(r)                            # Electron-proton potential
+
+S = [phi0_1,phi0_2,phi0_3]          # List of test functions
+phi0 = S[l - 1]                     # Hydrogen atom eigenstate
+phi = S[l - 1][1:-1]                # Test function
+
+for i in np.arange(n + 1):
+    
+    A = phi.copy()
+    B = np.append([0],A)
+    B = np.append(B,[0])
+    
+    # Computation of the eigenfunctions and eigenvalues
+    
+    in1 = 1/(dr**2) + (b/(h**2))*V[1:-1] + (b/(h**2))*f*W(B,r)[1:-1]
+    in2 = - 1/(2*(dr**2))*np.ones(len(in1)-1)    
+    u,v = eigh_tridiagonal(in1,in2)
+    
+    norm = 4*np.pi*dr*np.sum(v.T[l - 1]**2)
+    v.T[l - 1] = v.T[l - 1]/np.sqrt(norm)
+    
+    # Improvement of the convergence
+    
+    phi = np.sum([v.T[l - 1],A],axis=0)
+    norm = 4*np.pi*dr*np.sum(phi**2)
+    phi = phi/np.sqrt(norm)
+    
+    # Computed eigenenergy
+    
+    print(((h**2)/(b*q))*u[l - 1])
+
+print(80*'=')
+
+
+# Final eigenfunction ==========
+
+
+B = np.append([0],phi)
+B = np.append(B,[0])
+phi = B
+
+
+# Plots of the radial probability densities ==========
+
+
+print(80*'=')
+
+plt.plot(r*1e10,(4*np.pi*((phi0)**2))/1e10)
+plt.plot(r*1e10,(4*np.pi*(phi**2))/1e10,linestyle='dashed')
+plt.xlabel('r ($\AA$)',fontsize=14)
+plt.ylabel('F(r) ($\AA^{-1}$)',fontsize=14)
+plt.savefig('phi_' + str(l) + '.pdf',format="pdf",bbox_inches="tight")
+plt.show()
+
+print(80*'=')
